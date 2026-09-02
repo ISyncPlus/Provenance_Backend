@@ -96,6 +96,20 @@ export const auth = betterAuth({
       sameSite: env.isProduction ? "none" : "lax",
       secure: env.isProduction,
     },
+    // Use cookie-based state storage for OAuth flows. Unlike the default DB
+    // strategy, this survives cross-origin deployments without relying on a
+    // verification record lookup that can fail if the callback hits a different
+    // instance or the record is consumed by a concurrent request.
+    // See: https://www.better-auth.com/docs/reference/errors/state_mismatch
+    cookiePrefix: "provenance",
+  },
+
+  verification: {
+    // Store in DB as a fallback, but primary state is in the signed cookie.
+    storeInDatabase: true,
+    // Disable hashed identifiers so BETTER_AUTH_SECRET rotation doesn't break
+    // in-flight OAuth flows.
+    storeIdentifier: "plain",
   },
 
   rateLimit: {
