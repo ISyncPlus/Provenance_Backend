@@ -2,6 +2,7 @@ import { fromNodeHeaders } from "better-auth/node";
 import type { NextFunction, Request, Response } from "express";
 import type { Role } from "@prisma/client";
 import { auth } from "../auth.js";
+import { prisma } from "../db.js";
 import { forbidden, unauthorized } from "../lib/httpError.js";
 
 export type AuthenticatedUser = {
@@ -38,16 +39,30 @@ export const attachUser = async (
     });
 
     if (session?.user) {
-      const user = session.user as unknown as Record<string, unknown>;
-      req.user = {
-        id: String(user.id),
-        name: String(user.name ?? ""),
-        email: String(user.email ?? ""),
-        image: (user.image as string | null) ?? null,
-        role: (user.role as Role) ?? "student",
-        identifier: (user.identifier as string | null) ?? null,
-        onboardedAt: user.onboardedAt ? new Date(user.onboardedAt as string) : null,
-      };
+      const dbUser = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          image: true,
+          role: true,
+          identifier: true,
+          onboardedAt: true,
+        },
+      });
+
+      if (dbUser) {
+        req.user = {
+          id: dbUser.id,
+          name: dbUser.name,
+          email: dbUser.email,
+          image: dbUser.image,
+          role: dbUser.role,
+          identifier: dbUser.identifier,
+          onboardedAt: dbUser.onboardedAt,
+        };
+      }
     }
     next();
   } catch (error) {
