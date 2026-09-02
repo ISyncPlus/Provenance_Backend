@@ -64,7 +64,7 @@ export const createApp = () => {
    * Better Auth mounts BEFORE express.json().
    * It reads the raw request stream directly.
    */
-  app.all("/api/auth/*splat", toNodeHandler(auth));
+  app.all("/api/auth/*", toNodeHandler(auth));
 
   app.use(
     express.json({

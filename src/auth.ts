@@ -27,6 +27,16 @@ export const auth = betterAuth({
     requireEmailVerification: false,
   },
 
+  account: {
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ["google", "github"],
+    },
+    // Cross-origin redirects (e.g. Google -> API -> Frontend across different ports/domains)
+    // rely on database state verification instead of flaky third-party browser state cookies.
+    skipStateCookieCheck: true,
+  },
+
   socialProviders: {
     ...(env.google
       ? {
