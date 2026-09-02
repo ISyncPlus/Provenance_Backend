@@ -1,0 +1,189 @@
+// Provenance — data model
+//
+// The four auth models (User, Session, Account, Verification) are the schema
+// Better Auth expects; extra columns on User are declared to Better Auth as
+// `additionalFields` in src/auth.ts so they stay in sync.
+//
+// Submission stores the *derived* verification record only. The original
+// photograph is never uploaded — see ARCHITECTURE.md, Decision 1.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  student
+  lecturer
+}
+
+enum VerificationStatus {
+  Verified
+  Suspicious
+  Reused
+}
+
+enum CheckResult {
+  Pass
+  Fail
+}
+
+enum Completeness {
+  Complete
+  Partial
+  Missing
+}
+
+// ---------------------------------------------------------------- Auth
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+
+  // --- Provenance additions -------------------------------------------
+  // Role is never accepted from the client. Sign-up always yields `student`;
+  // elevation requires the server-verified invite code. See Decision 3.
+  role Role @default(student)
+
+  /// Registration number (students) or staff ID (lecturers).
+  /// Null until the user completes onboarding.
+  identifier String? @unique
+
+  /// Set once role + identifier have been claimed. The frontend routes users
+  /// here first when it is null.
+  onboardedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions    Session[]
+  accounts    Account[]
+  submissions Submission[]
+
+  @@index([role])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ---------------------------------------------------- Verification record
+
+model Submission {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the original file, computed in the browser. Not unique: a
+  /// duplicate is a record we deliberately keep, flagged as Reused.
+  hash     String
+  fileName String
+
+  /// Downscaled preview (data URL, <= 96px). The full-resolution original is
+  /// never transmitted.
+  thumbnailUrl String? @db.Text
+
+  // --- Extracted metadata, as claimed by the client --------------------
+  captureTime   String?
+  latitude      Float?
+  longitude     Float?
+  locationName  String?
+  device        String?
+  completeness  Completeness @default(Missing)
+  gpsTagsPresent Boolean     @default(false)
+
+  // --- Verdict, re-derived server-side. See Decision 2. ----------------
+  status VerificationStatus
+  reason String             @db.Text
+
+  timeCheck      CheckResult
+  locationCheck  CheckResult
+  deviceCheck    CheckResult
+  duplicateCheck CheckResult
+  reused         Boolean     @default(false)
+
+  /// The earlier submission this one duplicates, when reused.
+  duplicateOfId String?
+
+  checkedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([hash])
+  @@index([status])
+  @@index([createdAt])
+  @@map("submission")
+}
+
+// ---------------------------------------------------- Immutable Audit Log
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  targetId  String?
+  details   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([action, createdAt])
+  @@index([actorId])
+  @@index([targetId])
+  @@map("audit_log")
+}
