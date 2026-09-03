@@ -127,7 +127,13 @@ model Submission {
   id String @id @default(cuid())
 
   userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade: Submission is the duplicate-hash ledger this whole
+  /// app exists to maintain. Cascading would let a deleted account's hash
+  /// history vanish, so the same file could be resubmitted under a new
+  /// account and no longer be caught as Reused. There is no user-delete flow
+  /// today; if one is added, it must reassign/anonymize a user's submissions
+  /// first rather than deleting them out from under this constraint.
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   /// SHA-256 of the original file, computed in the browser. Not unique: a
   /// duplicate is a record we deliberately keep, flagged as Reused.

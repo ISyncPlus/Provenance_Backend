@@ -279,7 +279,9 @@ port 3001 because 3000 was busy, either free 3000 or update `FRONTEND_URL`.
 **Signed in, but the app says signed out**
 The session cookie isn't reaching the API. Check `NEXT_PUBLIC_API_URL` matches
 `BETTER_AUTH_URL` exactly — `localhost` and `127.0.0.1` are different origins to
-a browser, so mixing them silently breaks the cookie.
+a browser, so mixing them silently breaks the cookie. In production, on
+separate domains, this can also happen only in some browsers — see "OAuth
+reliability" under Going to production.
 
 **Google: `Error 403: access_blocked`**
 Your account isn't on the OAuth consent screen's *Test users* list. Add it.
@@ -310,3 +312,87 @@ API after editing (env is read once, at boot).
 5. Use `npx prisma migrate deploy` on the server, not `migrate dev`.
 6. Rotate `LECTURER_INVITE_CODE` and set `LECTURER_EMAIL_ALLOWLIST`.
 7. Never commit `.env`. It is already git-ignored — keep it that way.
+8. **List every domain the frontend is actually served from** in
+   `FRONTEND_URL` / `ADDITIONAL_ORIGINS` — the production custom domain *and*
+   the default `*.vercel.app` one if people ever land on it (a Vercel deploy
+   notification links the auto-generated domain, not your custom one). A
+   domain missing from this list doesn't error loudly; sign-in on it just
+   fails, which reads as "OAuth is flaky" when it is really "this particular
+   origin was never allow-listed."
+
+### OAuth reliability (sign-in "sometimes works, sometimes doesn't")
+
+If the frontend (Vercel) and the API (Render/Railway/Fly/…) are on
+**completely separate domains** — not two subdomains of the same site — the
+session cookie the API sets is, from the browser's point of view, a
+**third-party cookie**. `sameSite: "none", secure: true` (set automatically
+in production, see `src/auth.ts`) is *necessary* for that but not always
+*sufficient*: Safari's Intelligent Tracking Prevention blocks third-party
+cookies by default regardless of `SameSite`, and Chrome/Firefox are moving
+the same direction. The result is exactly this symptom — it works in one
+browser or one session and not another, with no code change in between.
+
+**The fix that actually removes the flakiness** is to make the cookie
+first-party by putting the API under the *same site* as the frontend:
+
+- **Preferred — a subdomain.** Serve the frontend at `app.yourdomain.com` (or
+  the bare domain) and the API at `api.yourdomain.com`. Cookies set by
+  `api.yourdomain.com` are then first-party to a visitor on
+  `app.yourdomain.com` — no ITP/third-party blocking applies. Update
+  `BETTER_AUTH_URL`, `FRONTEND_URL` and `NEXT_PUBLIC_API_URL` to the new
+  domains and re-register the OAuth callback URLs with Google/GitHub.
+- **No custom domain — proxy through Vercel (what this deployment uses).**
+  `ImageMetadataVerificationSystem/next.config.ts` already has a `rewrites()`
+  that forwards every `/api/*` request to the real API server-side. Two env
+  vars make it active:
+
+  | Where | Variable | Value |
+  | --- | --- | --- |
+  | Vercel project settings (Production **and** Preview) | `API_ORIGIN` | `https://provenance-backend-mamk.onrender.com` |
+  | Vercel project settings (Production **and** Preview) | `NEXT_PUBLIC_API_URL` | `""` (empty — not unset, empty) |
+
+  With `NEXT_PUBLIC_API_URL` empty, `lib/auth-client.ts` calls this app's own
+  `/api/*` paths instead of the Render domain directly; Vercel's rewrite
+  forwards those server-side. The browser now only ever talks to one origin
+  (`provenance-imvs.vercel.app`), so the session cookie is first-party by
+  construction — no browser's third-party-cookie policy can touch it.
+  `API_ORIGIN` has no `NEXT_PUBLIC_` prefix on purpose: it's read by the
+  rewrite at request time on Vercel's infrastructure, never shipped to the
+  browser.
+
+  Redeploy after setting both — Next.js reads `rewrites()` and inlines
+  `NEXT_PUBLIC_*` values at build time, so they won't take effect until the
+  next deploy.
+
+  **This alone is not the whole fix.** It routes ordinary API calls
+  (`/api/me`, `/api/submissions`, `get-session`, …) through Vercel, but the
+  OAuth handshake itself — `/api/auth/sign-in/social`,
+  `/api/auth/callback/google` — needs to go through Vercel too, or the
+  session cookie Google's redirect causes to be set still lands on the
+  Render domain, and every *proxied* call afterwards (which the browser now
+  addresses to Vercel) won't carry it. Three more changes, together:
+
+  1. On the API host (Render), set `BETTER_AUTH_URL` to the **frontend's**
+     URL — `https://provenance-imvs.vercel.app` — instead of the API's own
+     `onrender.com` URL. This only changes what URL Better Auth *writes into
+     the links it generates*; Express still listens wherever Render put it,
+     the Vercel rewrite is what makes the public URL and the actual server
+     match up again.
+  2. In the Google Cloud Console and the GitHub OAuth App, add
+     `https://provenance-imvs.vercel.app/api/auth/callback/google` and
+     `.../api/auth/callback/github` as authorized redirect URIs — Google and
+     GitHub redirect the browser to whatever `redirect_uri` Better Auth now
+     builds from the new `BETTER_AUTH_URL`, so they have to be told that URI
+     is expected. Leave the old `onrender.com` ones registered too so
+     nothing mid-flight breaks the moment you deploy.
+  3. `FRONTEND_URL` / `ADDITIONAL_ORIGINS` on the API can stay as they are —
+     they already need to list the Vercel domain for CORS, which this reuses.
+
+  Do the `BETTER_AUTH_URL` change and the console redirect URIs together —
+  half of this (only the rewrite, or only the Google Console change) leaves
+  sign-in either unreachable or landing on the wrong domain.
+
+Either approach means `account.skipStateCookieCheck` in `src/auth.ts` is no
+longer covering for a real gap — it can stay on as a harmless fallback, but
+the browser-dependent sign-in failures it was worked around for should stop
+happening once the domains are same-site.

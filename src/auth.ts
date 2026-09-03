@@ -32,8 +32,23 @@ export const auth = betterAuth({
       enabled: true,
       trustedProviders: ["google", "github"],
     },
-    // Cross-origin redirects (e.g. Google -> API -> Frontend across different ports/domains)
-    // rely on database state verification instead of flaky third-party browser state cookies.
+    // `signIn.social()` kicks the flow off with a cross-site `fetch()` from the
+    // Vercel frontend to this API, not a top-level navigation — so the state
+    // cookie this sets is a third-party cookie from the browser's point of
+    // view. Safari's Intelligent Tracking Prevention (and Chrome/Firefox's
+    // increasingly strict third-party-cookie policies) can drop it before the
+    // provider redirects back, which surfaces as "State mismatch: State not
+    // persisted correctly" — intermittently, depending on the visitor's
+    // browser and its privacy settings, not on anything this server does.
+    // Skipping the check falls back to the state row in `verification`
+    // (looked up by the random `state` param, single-use, expiring), which
+    // does not depend on that cookie surviving the round trip.
+    //
+    // This treats the symptom, not the cause. The real fix is to make the
+    // session cookie first-party by putting the API on a subdomain of the
+    // same site as the frontend (or proxying /api/* through the frontend's
+    // domain) so no cookie in this flow is ever cross-site. See "OAuth
+    // reliability" in ENV_SETUP.md.
     skipStateCookieCheck: true,
   },
 
@@ -96,16 +111,17 @@ export const auth = betterAuth({
       sameSite: env.isProduction ? "none" : "lax",
       secure: env.isProduction,
     },
-    // Use cookie-based state storage for OAuth flows. Unlike the default DB
-    // strategy, this survives cross-origin deployments without relying on a
-    // verification record lookup that can fail if the callback hits a different
-    // instance or the record is consumed by a concurrent request.
-    // See: https://www.better-auth.com/docs/reference/errors/state_mismatch
+    // Namespaces this app's cookies (avoids collisions with other apps on the
+    // same domain). Does NOT change how OAuth state is stored — that's
+    // `account.skipStateCookieCheck` above, and it's a workaround, not a fix.
+    // See "OAuth reliability" in ENV_SETUP.md for what actually fixes it.
     cookiePrefix: "provenance",
   },
 
   verification: {
-    // Store in DB as a fallback, but primary state is in the signed cookie.
+    // This DB row (looked up by the single-use `state` param) is what OAuth
+    // sign-in actually relies on when the state cookie doesn't survive the
+    // cross-site redirect — see `account.skipStateCookieCheck` above.
     storeInDatabase: true,
     // Disable hashed identifiers so BETTER_AUTH_SECRET rotation doesn't break
     // in-flight OAuth flows.
