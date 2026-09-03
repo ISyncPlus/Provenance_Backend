@@ -6,6 +6,9 @@ export interface LedgerStats {
   verified: number;
   suspicious: number;
   reused: number;
+  /** Distinct people who have filed within the caller's scope — the whole
+   *  department for a lecturer, and only themselves for a student. */
+  students: number;
 }
 
 export class GetStatsUseCase {

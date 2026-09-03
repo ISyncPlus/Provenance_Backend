@@ -110,15 +110,30 @@ export class SubmissionRepository {
     verified: number;
     suspicious: number;
     reused: number;
+    students: number;
   }> {
     const client = tx ?? this.prisma;
-    const [total, verified, suspicious, reused] = await Promise.all([
-      client.submission.count({ where }),
-      client.submission.count({ where: { ...where, status: "Verified" } }),
-      client.submission.count({ where: { ...where, status: "Suspicious" } }),
-      client.submission.count({ where: { ...where, status: "Reused" } }),
-    ]);
+    const [total, verified, suspicious, reused, distinctUsers] =
+      await Promise.all([
+        client.submission.count({ where }),
+        client.submission.count({ where: { ...where, status: "Verified" } }),
+        client.submission.count({ where: { ...where, status: "Suspicious" } }),
+        client.submission.count({ where: { ...where, status: "Reused" } }),
+        // How many distinct people have filed within this scope. groupBy is
+        // the only way to get it in one round trip; the row count is the
+        // answer, so nothing but the key is selected.
+        client.submission.groupBy({
+          by: ["userId"],
+          where,
+        }),
+      ]);
 
-    return { total, verified, suspicious, reused };
+    return {
+      total,
+      verified,
+      suspicious,
+      reused,
+      students: distinctUsers.length,
+    };
   }
 }
